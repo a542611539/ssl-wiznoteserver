@@ -1,0 +1,98 @@
+姓名：名称：Docker
+
+# 此工作流程使用未经 GitHub 认证的操作。
+#它们由第三方提供，并受以下机构管辖：
+# 单独的服务条款、隐私政策和支持
+#文档。
+
+在：
+  议程：
+    - cron：'16 4 * * *'
+  推：
+    分支: [    分支：[ “master” ] “master”    ]
+    # 将 semver 标签发布为版本。# 将 semver 标签发布为版本。
+    标签: [    标签：[    'v*.*.*'    ]   'v*.*.*'    ]
+  答案：
+    分支: [    分支：[ “master” ] “master”    ]
+
+环境：
+  # 如果为空，则使用 docker.io 作为 Docker Hub# 如果为空，则使用 docker.io 作为 Docker Hub
+  注册地址： 注册地址：ghcr.io
+  # github.repository 作为 <account>/<repo>
+  图片名称：$ {     { github.repository }    }
+
+
+工作：
+  建造：
+
+    运行：ubuntu-latest
+    权限：
+      内容：阅读
+      包装：写
+      # 用于完成身份挑战
+      # 在 PR 之外运行时使用 sigstore/fulcio。
+      基督说：写
+
+    步骤：
+      -名称：签出存储库
+        用途： actions/checkout@v4
+
+      # 在 PR 之外安装 cosign 工具# 在 PR 之外安装 cosign 工具
+      # https://github.com/sigstore/cosign-installer
+      -姓名：安装 cosign
+        如果：github.event_name != 'pull_request'
+        用途：sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
+        和：
+          共同签名版本：'v2.2.4'
+
+      # 设置 BuildKit Docker 容器构建器以便能够构建
+      #多平台图像和恢复存储#多平台图像和恢复存储
+      # https://github.com/docker/setup-buildx-action# https://github.com/docker/setup-buildx-action
+      -名称：设置 Docker Buildx
+        用途：docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 #v3.0.0#v3.0.0
+
+      #除了公关以外，通过 Docker 栅栏登录#除了 PR 以外，通过 Docker 栅栏登录
+      # https://github.com/docker/login-action# https://github.com/docker/login-action
+      - name :        - 名称：登录北极 $ { { env.REGISTRY } } { { env.REGISTRY } }
+        if :         如果：github.event_name！= 'pull_request' 'pull_request'
+        使用：         使用：docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d#v3.0.0# v3.0.0
+        和：
+          注册表：           故障：$ { { env.REGISTRY } } { { env.REGISTRY } }
+          用户名:           用户名：$ { { github.actor } } { { github.actor } }
+          密码:           密码：$ { { Secrets.GITHUB_TOKEN } } { { Secrets.GITHUB_TOKEN } }
+
+      # 提取 Docker 的元数据（标签）# 提取 Docker 的元数据（标签、标签）
+      # https://github.com/docker/metadata-action# https://github.com/docker/metadata-action
+      - name :        - 名称：Docker提取元数据
+        id :          id :元
+        使用：         使用：docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934#v5.0.0# v5.0.0
+        和：
+          images :           图像：$ { { env.REGISTRY } } /$ { { env.IMAGE_NAME } } { { env.REGISTRY } } /$ { { env.IMAGE_NAME } }
+
+      # 使用 Buildx 构建并推送 Docker 镜像（不要在 PR 上推送）
+      # https://github.com/docker/build-push-action
+      -名称：构建并推送 Docker 镜像
+        id :构建并推送
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Sign the resulting Docker image digest except on PRs.
+      # This will only write to the public Rekor transparency log when the Docker
+      # repository is public to avoid leaking data.  If you would like to publish
+      # transparency data even for private images, pass --force to cosign below.
+      # https://github.com/sigstore/cosign
+      - name: Sign the published Docker image
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        # This step uses the identity token to provision an ephemeral certificate
+        # against the sigstore community Fulcio instance.
+        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
